@@ -2,20 +2,27 @@ package rwmutex
 
 import (
 	"primitives/internal/futex"
+	"runtime"
 	"sync/atomic"
 )
 
 const writer = 1 << 31
 
 type RWMutex struct {
-	state uint32
+	state           uint32
+	writers_waiting atomic.Bool
 }
 
 func (rw *RWMutex) RLock() { // Блокирует на чтение
 	for {
 		curr := atomic.LoadUint32(&rw.state)
 
-		if (curr & writer) != 0 {
+		if rw.writers_waiting.Load() {
+			runtime.Gosched()
+			continue
+		}
+
+		if curr >= writer {
 			futex.Wait(&rw.state, curr)
 			continue
 		}
@@ -23,25 +30,39 @@ func (rw *RWMutex) RLock() { // Блокирует на чтение
 		if atomic.CompareAndSwapUint32(&rw.state, curr, curr+1) {
 			return // Успешно захватили блокировку на чтение
 		}
+
+		runtime.Gosched()
 	}
 }
 
 func (rw *RWMutex) RUnlock() { // Разблокирует на чтение
-	new := atomic.AddUint32(&rw.state, ^uint32(0))
+	for {
+		old := atomic.LoadUint32(&rw.state)
 
-	if new == ^uint32(0) {
-		panic("RWMutex не заблокирован")
+		if old == 0 {
+			panic("RWMutex не заблокирован")
+		}
+
+		if atomic.CompareAndSwapUint32(&rw.state, old, old-1) {
+			if old-1 == 0 {
+				futex.Wake(&rw.state)
+			}
+			return
+		}
+
+		runtime.Gosched()
 	}
-
-	futex.WakeAll(&rw.state)
 }
 
 func (rw *RWMutex) Lock() { // Блокирует на запись
+	rw.writers_waiting.Store(true)
+
 	for {
 		curr := atomic.LoadUint32(&rw.state)
 
 		if curr == 0 {
 			if atomic.CompareAndSwapUint32(&rw.state, 0, writer) {
+				rw.writers_waiting.Store(false)
 				return
 			}
 			continue

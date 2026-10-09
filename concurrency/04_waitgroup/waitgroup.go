@@ -2,6 +2,7 @@ package waitgroup
 
 import (
 	"primitives/internal/futex"
+	"runtime"
 	"sync/atomic"
 )
 
@@ -10,18 +11,29 @@ type WaitGroup struct {
 }
 
 func (wg *WaitGroup) Add(delta int) {
-	atomic.AddUint32(&wg.count, uint32(delta))
+	for {
+		old := atomic.LoadUint32(&wg.count)
+
+		v := int(old) + delta
+
+		if v < 0 {
+			panic("Счетчик не может быть меньше нуля")
+		}
+
+		if atomic.CompareAndSwapUint32(&wg.count, old, uint32(v)) {
+			if v == 0 {
+				futex.WakeAll(&wg.count)
+			}
+
+			return
+		}
+
+		runtime.Gosched()
+	}
 }
 
 func (wg *WaitGroup) Done() {
-	new := atomic.AddUint32(&wg.count, ^uint32(0))
-
-	if new == ^uint32(0) {
-		panic("Счетчик не может быть меньше нуля")
-	}
-	if new == 0 {
-		futex.WakeAll(&wg.count)
-	}
+	wg.Add(-1)
 }
 
 func (wg *WaitGroup) Wait() {
@@ -32,5 +44,7 @@ func (wg *WaitGroup) Wait() {
 		}
 
 		futex.Wait(&wg.count, curr)
+
+		runtime.Gosched()
 	}
 }

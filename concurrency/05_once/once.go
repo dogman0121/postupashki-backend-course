@@ -30,17 +30,7 @@ func (o *Once) Do(f func()) {
 		return
 	}
 
-	for {
-		currentState := atomic.LoadUint32(&o.state)
-
-		// Если пока мы собирались спать, поток А уже всё закончил — выходим
-		if currentState == executed {
-			return
-		}
-
-		// Засыпаем только если состояние до сих пор executing (1)
-		futex.Wait(&o.state, currentState)
-	}
+	futex.Wait(&o.state, executing)
 }
 
 func (o *Once) Done() bool {

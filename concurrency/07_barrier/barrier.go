@@ -12,29 +12,27 @@ type Barrier struct {
 }
 
 func New(n int) *Barrier {
+	if n <= 1 {
+		panic("Barrier не может быть отрицательным")
+	}
 	return &Barrier{need: uint32(n), arrived: 0, round: 0}
 }
 
 func (b *Barrier) Wait() {
+	round := atomic.LoadUint32(&b.round)
 	for {
-		curr := atomic.LoadUint32(&b.arrived)
-		round := atomic.LoadUint32(&b.round)
+		old := atomic.AddUint32(&b.arrived, 1)
 
-		if atomic.CompareAndSwapUint32(&b.arrived, curr, curr+1) {
-			need := atomic.LoadUint32(&b.need)
-			if curr+1 == need {
-				atomic.AddUint32(&b.round, 1)
+		if old == b.need {
+			atomic.SwapUint32(&b.arrived, 0)
+			atomic.AddUint32(&b.round, 1)
 
-				atomic.SwapUint32(&b.arrived, 0)
-
-				futex.WakeAll(&b.round)
-				return
-			}
-
-			if round == atomic.LoadUint32(&b.round) {
-				futex.Wait(&b.round, round)
-			}
+			futex.WakeAll(&b.round)
 			return
 		}
+
+		futex.Wait(&b.round, round)
+
+		break
 	}
 }
